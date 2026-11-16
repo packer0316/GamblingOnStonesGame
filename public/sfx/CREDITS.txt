@@ -1,0 +1,59 @@
+Sound effects of 一刀窮一刀富 — every source is CC0 1.0 (public domain); no attribution is required.
+They are cut, layered and loudness-matched by tools/sfx_build.py.
+
+Kenney (kenney.nl), CC0: Impact Sounds, Interface Sounds, RPG Audio, Sci-Fi Sounds.
+
+Freesound (freesound.org), CC0:
+    18654  gong.aiff — nkuitse  https://freesound.org/s/18654/
+    19290  clothxtra foley flap.wav — martian  https://freesound.org/s/19290/
+    19291  foley cloth rustle.wav — martian  https://freesound.org/s/19291/
+    76886  Gong.wav — airtaxi  https://freesound.org/s/76886/
+   109360  stone falls and breaks low pitch.aiff — SoundCollectah  https://freesound.org/s/109360/
+   121557  firecrackers.wav — sbarncar  https://freesound.org/s/121557/
+   161315  Counting Me Shillings.mp3 — husky70  https://freesound.org/s/161315/
+   173938  Pour Splash metal bucket water.mp3 — JohnsonBrandEditing  https://freesound.org/s/173938/
+   178097  banknote-counter.wav — madvedj  https://freesound.org/s/178097/
+   187335  Flashlight Clicking On.wav — baidonovan  https://freesound.org/s/187335/
+   212177  Tap Water 1 — OwlStorm  https://freesound.org/s/212177/
+   221568  cheering and clapping crowd 1 — AlaskaRobotics  https://freesound.org/s/221568/
+   232136  rolling cart 002.wav — yottasounds  https://freesound.org/s/232136/
+   264499  Crowd Ooohs and Ahhhs in Excitement — noah0189  https://freesound.org/s/264499/
+   272428  Closing a Paper Fan.wav — ryanharding95  https://freesound.org/s/272428/
+   320144  Blanket Movement 6 — OwlStorm  https://freesound.org/s/320144/
+   324896  Crowd aah.wav — deleted_user_2104797  https://freesound.org/s/324896/
+   324897  Crowd Ouch.wav — deleted_user_2104797  https://freesound.org/s/324897/
+   334969  Many Coins Dumped on a Wooden Surface.mp3 — dominictreis  https://freesound.org/s/334969/
+   339147  Angle Grinder_Cutting Concrete — Beethovenboy  https://freesound.org/s/339147/
+   364709  Rock on Rock Scrape — alegemaate  https://freesound.org/s/364709/
+   386195  Leg vise - Slide — ldezem  https://freesound.org/s/386195/
+   386197  Leg vise - Hit — ldezem  https://freesound.org/s/386197/
+   399586  jacket — WolffVisuals  https://freesound.org/s/399586/
+   422513  Swinging staff whoosh (strong) 04.wav — Nightflame  https://freesound.org/s/422513/
+   428337  Canvas Dropcloth Snap 1 — zembacraftworks  https://freesound.org/s/428337/
+   429080  Shirt Clothing Movement — leonelmail  https://freesound.org/s/429080/
+   438988  Large duffel bag drop — vintage2005  https://freesound.org/s/438988/
+   440499  Light Switch Turn Off Sound — ChrisTutorials  https://freesound.org/s/440499/
+   444521  Ambience at a Chinese restaurant street — nomadas  https://freesound.org/s/444521/
+   449489  Dremel on off and increasing speed — rodrigocswm  https://freesound.org/s/449489/
+   452400  cymbal splash hit nearby chinese opera in park.flac — kyles  https://freesound.org/s/452400/
+   457463  Small_Flashlight_Click_on_02.wav — Rudmer_Rotteveel  https://freesound.org/s/457463/
+   462362  Small applause — Breviceps  https://freesound.org/s/462362/
+   483405  Brick fall on carpet -3db.aiff — vintage2005  https://freesound.org/s/483405/
+   516608  Chop Saw — jameswrowles  https://freesound.org/s/516608/
+   522299  Crickets At Night - Raw sound — Defelozedd94  https://freesound.org/s/522299/
+   540972  wipe and scrub.wav — polyn  https://freesound.org/s/540972/
+   558254  Heavy Stone Push — msavioti  https://freesound.org/s/558254/
+   595041  money counter.wav — 21100354  https://freesound.org/s/595041/
+   611113  bell ding 1.wav — 5ro4  https://freesound.org/s/611113/
+   619007  crowd `oh - - disappointed.mp3 — mrrap4food  https://freesound.org/s/619007/
+   630484  Bottle Squirt.wav — jimbo555  https://freesound.org/s/630484/
+   640254  geroezemoes.wav — gecop  https://freesound.org/s/640254/
+   688735  Heartbeat 97 BPM — Cloud-10  https://freesound.org/s/688735/
+   743262  Stone Sliding — qubodup  https://freesound.org/s/743262/
+   788643  Light Switch on — Philip_Berger  https://freesound.org/s/788643/
+   835550  Industrial Lever — Autobot8299  https://freesound.org/s/835550/
+   856549  Chinese Bass Drum Dagu - Center Stroke on Drumhead - Loud — sazanami12  https://freesound.org/s/856549/
+   856550  Chinese Bass Drum Dagu - Center Stroke on Drumhead - Soft — sazanami12  https://freesound.org/s/856550/
+   856559  Chinese Bass Drum Dagu - Rim Shot from Both Sides - Loud — sazanami12  https://freesound.org/s/856559/
+   856560  Chinese Bass Drum Dagu - Rim Shot from Both Sides - Soft — sazanami12  https://freesound.org/s/856560/
+   875428  Marble Coaster Hard Clicks — loganzsound  https://freesound.org/s/875428/
