@@ -19,6 +19,9 @@ import { BOX, MAX_CRACKS, MAX_BANDS } from './gen.js';
 import { SD_LO, SD_HI, VOL_N } from './bake.js';
 import { SKINS, FOGS, BODIES } from '../game/lore.js';
 import { GRIND } from './grind.js';
+import { createGradNoise } from './tileNoise.js';
+
+let gradTex = null; // one for every stone
 
 export const MAX_WINDOWS = 16;
 export const MAX_PLANES = 8;
@@ -43,7 +46,7 @@ export function createStoneUniforms(def, texA, texB, noiseTex) {
   // crystal size follows the grade: 3 mm grains in 豆種, well under a millimetre once it turns icy
   const crystalCm = 0.32 - 0.25 * smooth(0.1, 0.55, def.z.base);
   const u = {
-    uTexA: { value: texA }, uTexB: { value: texB }, uNoise: { value: noiseTex },
+    uTexA: { value: texA }, uTexB: { value: texB }, uNoise: { value: noiseTex }, uGrad: { value: (gradTex ||= createGradNoise()) },
     uSkinT: { value: def.skinT }, uFogT: { value: def.fogT }, uUnit: { value: def.unitCm },
     uGrain: { value: def.grain }, uSkinRough: { value: S.rough }, uSkinWax: { value: S.wax }, uSpeck: { value: S.speck },
     uSkinPass: { value: skinPass(def.skinT, S.wax) },
@@ -162,11 +165,18 @@ export function createJadeMaterial(shared) {
       .replace('#include <common>', `#include <common>\n${PARS}`)
       .replace('#include <color_fragment>', `#include <color_fragment>\n${SURFACE}`)
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = jRough;')
-      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${bump('normal', 'jHeight', '1.3')}`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${bump('normal', 'jHeight', '1.3')}
+        {
+          // the skin: tilted by the slope of its own relief, which is known exactly
+          vec3 nFlat = normalize(normalMatrix * jN);
+          normal = normalize(normal + normalize(normalMatrix * normalize(jN - jSlope)) - nFlat);
+        }`)
       .replace('#include <clearcoat_normal_fragment_maps>', `#include <clearcoat_normal_fragment_maps>
         #ifdef USE_CLEARCOAT
         // the film of water on a sawn face is never optically flat
         ${bump('clearcoatNormal', 'jFilm', '0.5')}
+        // and on wet skin it lies over the sand, filling the hollows but not hiding the grain
+        clearcoatNormal = normalize(mix(clearcoatNormal, normal, 0.6 * outer));
         #endif`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         totalEmissiveRadiance += jEmissive;`)
@@ -178,13 +188,14 @@ export function createJadeMaterial(shared) {
         clearcoatSpecularDirect = min(clearcoatSpecularDirect, vec3(1.1));
         reflectedLight.directSpecular = min(reflectedLight.directSpecular, vec3(0.7));`);
   };
-  mat.customProgramCacheKey = () => 'jade-v4';
+  mat.customProgramCacheKey = () => 'jade-v11';
   return mat;
 }
 
 // ----------------------------------------------------------------------------
 const PARS = /* glsl */ `
-uniform sampler3D uTexA, uTexB, uNoise;
+uniform sampler3D uTexA, uTexB, uNoise, uGrad;
+uniform mat3 normalMatrix;
 uniform float uSkinT, uFogT, uUnit, uScale, uGrain, uSkinRough, uSkinWax, uSpeck, uSkinPass, uStainAmt, uCrystal, uLit;
 uniform vec3 uSkinColor, uSkinStain, uSkinDark, uStainOff, uFogColor, uBodyColor;
 uniform float uHue, uPurpleTone, uYellowRed, uCottonDots;
@@ -258,6 +269,50 @@ vec3 grains(vec3 p) {
   }
   return vec3(id.x, sqrt(d2) - sqrt(d1), id.y);
 }
+
+/**
+ * Gradient noise with its exact gradient: x is the value (about -0.8..0.8),
+ * yzw its slope per unit of p. Both come out of one small volume that stores
+ * the slope alongside the value (createGradNoise), so the skin's relief is
+ * shaded from a slope that is known, not from the difference between
+ * neighbouring pixels or texels: no blocks, no facets, no weave.
+ */
+vec4 gnoise(vec3 p) {
+  vec4 t = textureLod(uGrad, p * 0.125, 0.0);
+  return vec4(t.a * 2.0 - 1.0, (t.rgb - 0.5) * 6.0);
+}
+
+/**
+ * Packed grains of sand. xyz: the way to the nearest grain's centre, w: the
+ * squared distance to it. id: three numbers that belong to that grain.
+ * (Only the eight cells round p are searched, with the grains kept off their
+ * cells' walls so that is nearly always enough.)
+ */
+vec4 sand(vec3 p, out vec3 id) {
+  vec3 ip = floor(p - 0.5), fp = p - ip;
+  vec4 best = vec4(0.0, 0.0, 0.0, 9.0);
+  id = vec3(0.5);
+  for (int k = 0; k <= 1; k++) for (int j = 0; j <= 1; j++) for (int i = 0; i <= 1; i++) {
+    vec3 g = vec3(float(i), float(j), float(k));
+    vec3 o = hash3(ip + g);
+    vec3 r = g + 0.2 + 0.6 * o - fp;
+    float d = dot(r, r);
+    if (d < best.w) { best = vec4(r, d); id = o; }
+  }
+  return best;
+}
+
+/**
+ * A step up in the skin where n crosses level c, w wide.
+ * x: how far up the step (0..1), y: its steepness, z: 1 on the step's face and 0 away from it.
+ */
+vec3 ledge(float n, float c, float w) {
+  float t = sat((n - c) / w + 0.5);
+  return vec3(t * t * (3.0 - 2.0 * t), 6.0 * t * (1.0 - t) / w, 4.0 * t * (1.0 - t));
+}
+
+// each layer of relief is turned a different way, so no two line up with each other or with the stone's axes
+const mat3 TURN = mat3(0.00, 0.80, 0.60, -0.80, 0.36, -0.48, -0.60, -0.48, 0.64);
 
 /** Scattering per unit length: brick-opaque down to glass-clear. */
 float sigmaOf(float zq) { return 190.0 * exp(-5.2 * zq) + 0.8; }
@@ -496,19 +551,100 @@ for (int i = 0; i < ${MAX_BANDS}; i++) {
   float th = uBandNrm[i].w;
   mang = max(mang, (1.0 - smoothstep(th * 0.8, th * 1.9, abs(along + (nMed.r - 0.5) * 0.09))) * (1.0 - smoothstep(uBandC[i].w * 0.85, uBandC[i].w * 1.2, rho)));
 }
+// ---- the skin's relief
+// Worked in centimetres, so a grain of sand is the same size on a pebble and on
+// a boulder, and built from noise that comes with its exact slope (gnoise).
+// A weathered stone is not a field of soft bumps. Its skin has come away in
+// sheets that left ledges, chipped at the edges of those and been eaten into
+// pits; over all of it lies the sand, each grain a chip of crystal at its own
+// angle. A layer whose detail is smaller than a few pixels fades out rather
+// than sparkle.
+vec3 pc = jP * uUnit;
+// (the size of a pixel on the skin. Seen edge-on a pixel is long one way and short the other:
+// taking the long way would wipe a slanting face smooth, so it is weighed against the mean.)
+float pxA = length(dFdx(pc)), pxB = length(dFdy(pc));
+float pxCm = max(sqrt(pxA * pxB), max(pxA, pxB) * 0.4) + 1e-6;
+vec3 slopeBroad = vec3(0.0), slopeFine = vec3(0.0);
+float sMid = 0.5, sFine = 0.5, sSpeck = 0.5; // mottling at three scales, for the skin's colours
+float pits = 0.0, hollow = 0.0;
+float worn = 0.5; // 0 where the skin has flaked away deepest, 1 on what is left standing
+float grit = 0.6; // 0 in the gaps between grains of sand, 1 on a grain's crown
+float sandTone = 0.0, sandDark = 0.0, sandPale = 0.0, n4mottle = 0.0, n5mottle = 0.0;
+if (outer > 0.004) {
+  float w2 = smoothstep(1.6, 4.5, 1.6 / pxCm), w3 = smoothstep(1.6, 4.5, 0.5 / pxCm);
+  float w4 = smoothstep(1.6, 4.5, 0.16 / pxCm), w5 = smoothstep(1.6, 4.5, 0.075 / pxCm);
+  float cell = 0.05 * uGrain, wg = smoothstep(2.2, 5.5, cell / pxCm);
+  vec3 q1 = TURN * pc, q2 = TURN * q1;
+  vec4 n2 = vec4(0.0), n3 = vec4(0.0), n4 = vec4(0.0), n5 = vec4(0.0);
+  if (w2 > 0.004) {
+    // a sheet of skin, standing a little proud of where its neighbours have come away
+    vec4 n = gnoise(q1 / 1.6 + 3.1);
+    vec3 a = ledge(n.x, 0.2, max(0.16, 2.5 * pxCm / 1.6));
+    slopeBroad += (n.yzw * TURN) * (w2 * (0.07 + a.y * 0.035));
+    worn = mix(0.5, a.x, w2);
+    n2 = n * w2;
+  }
+  if (w3 > 0.004) {
+    // chips off those sheets; and where this layer runs lowest, pits
+    vec4 n = gnoise(q2 / 0.5 + 7.7);
+    float wd = max(0.07, 2.5 * pxCm / 0.5);
+    vec3 a = ledge(n.x, 0.24, max(0.12, wd)), p = ledge(-n.x, 0.46, max(0.09, wd));
+    slopeBroad += ((n.yzw * TURN) * TURN) * (w3 * (0.15 + a.y * 0.02 + p.y * 0.06));
+    pits = p.x * w3;
+    n3 = n * w3;
+  }
+  if (w4 > 0.004) {
+    n4 = gnoise(q1 / 0.16 + 21.7) * w4;
+    slopeFine += (n4.yzw * TURN) * 0.2;
+  }
+  if (w5 > 0.004) {
+    // (the tooth between that and the sand, so the skin never falls smooth just before its grains resolve)
+    n5 = gnoise(q2 / 0.075 + 4.3) * w5;
+    slopeFine += ((n5.yzw * TURN) * TURN) * 0.2;
+  }
+  if (wg > 0.004) {
+    vec3 id;
+    vec4 c = sand(q2 / cell + n4.yzw * 0.1 + 5.5, id);
+    // a grain is a low dome with a face tilted its own way, and they come in sizes
+    float r2 = 0.2 + 0.25 * id.z;
+    float dome = max(0.0, 1.0 - c.w / r2);
+    grit = mix(0.6, smoothstep(0.0, 0.5, dome), wg);
+    slopeFine += (((c.xyz * (0.2 / r2) + (id - 0.5) * 0.7) * TURN) * TURN) * (step(c.w, r2) * wg);
+    // and each its own mineral: most much alike, a few dark, a few pale and glassy
+    sandTone = (id.x - 0.5) * wg;
+    sandDark = step(0.94, id.y) * wg;
+    sandPale = step(id.y, 0.07) * wg;
+  }
+  sMid = 0.5 + 0.63 * (n2.x + 0.5 * n3.x + 0.25 * n4.x);
+  sFine = 0.5 + 0.68 * (n3.x + 0.6 * n4.x);
+  sSpeck = 0.5 + 0.7 * (n4.x + 0.45 * n3.x);
+  n4mottle = n4.x; n5mottle = n5.x;
+  hollow = sat(pits + sat(-n3.x * 1.6 - 0.1) * 0.5 + sat(-n4.x * 1.5) * 0.35 + sat(-n5.x * 1.5) * 0.3 * (1.0 - wg));
+}
+
 // 松花: a faded, mossy speckling over colour that lies just under the skin -- never paint
-float song = smoothstep(0.1, 0.5, sA.r + (nMed.r - 0.5) * 0.3) * smoothstep(0.34, 0.62, nGrain.g + (nMed.a - 0.5) * 0.5);
-float xian = smoothstep(0.3, 0.6, sB.b + (nMed.g - 0.5) * 0.28);
+float song = smoothstep(0.1, 0.5, sA.r + (nMed.r - 0.5) * 0.3) * smoothstep(0.34, 0.62, sSpeck + (sFine - 0.5) * 0.5);
+float xian = smoothstep(0.3, 0.6, sB.b + (sMid - 0.5) * 0.28);
 float wax = uSkinWax * smoothstep(0.38, 0.6, nBig.b + (nMed.r - 0.5) * 0.3);
-float pits = 1.0 - smoothstep(0.17, 0.3, nFine.g);
-float grit = nGrain.a * 0.55 + nFine.a * 0.45; // 0..1 height of the sand
+// sand lies thin on a 蟒帶 and is sealed over by 癬 and wax; the broad shapes stay
+float rugged = mix(0.5, 1.0, smoothstep(0.5, 0.95, uSkinRough)); // a water-worn or waxed stone has had its relief rubbed down
+vec3 jSlope = rugged * (slopeBroad * (1.0 - 0.3 * wax) + slopeFine * (1.0 - 0.6 * mang) * (1.0 - 0.75 * max(xian, wax))) * outer;
+jSlope -= jN * dot(jSlope, jN);
+jSlope *= min(1.0, 1.3 / max(length(jSlope), 1e-4));
 vec3 skinCol = uSkinColor;
-skinCol = mix(skinCol, uSkinStain, smoothstep(0.4, 0.74, nBig.r + (uStainAmt - 0.5) * 0.5 + (nMed.a - 0.5) * 0.2) * 0.85);
-skinCol = mix(skinCol, uSkinDark, pits * 0.45 + smoothstep(0.56, 0.82, nBig.g + (nMed.g - 0.5) * 0.3) * 0.45);
+skinCol = mix(skinCol, uSkinStain, smoothstep(0.4, 0.74, nBig.r + (uStainAmt - 0.5) * 0.5 + (sFine - 0.5) * 0.2 + (0.5 - worn) * 0.16) * 0.85);
+float nDark = noiseSmooth(jP * 0.42 + uStainOff.zxy + 0.61).r;
+skinCol = mix(skinCol, uSkinDark, pits * 0.25 + smoothstep(0.56, 0.82, nDark + (sMid - 0.5) * 0.3) * 0.45);
 skinCol *= 0.9 + 0.2 * nMed.r;
-// dirt sits in the hollows between grains, the grain tops are rubbed pale
-skinCol *= mix(1.0, 0.55 + 0.75 * smoothstep(0.25, 0.75, grit), uSpeck);
-skinCol += lin(0.6, 0.58, 0.52) * smoothstep(0.78, 0.92, nFine.a) * uSpeck * 0.1;
+// what is left standing is rubbed pale and chalky; dirt sits in everything lower --
+// in the pits, in the dips of the fine tooth, between the grains
+skinCol *= 0.93 + 0.14 * worn;
+skinCol *= 1.0 - 0.36 * hollow;
+skinCol *= 1.0 + (n4mottle * 0.3 + n5mottle * 0.24) * uSpeck; // mineral mottling, finer than the stains
+skinCol *= mix(1.0, 0.76 + 0.38 * smoothstep(0.25, 0.75, grit), uSpeck);
+skinCol *= 1.0 + sandTone * 0.44 * uSpeck;
+skinCol = mix(skinCol, skinCol * 0.5, sandDark * uSpeck);
+skinCol = mix(skinCol, skinCol * 1.35 + lin(0.6, 0.58, 0.52) * 0.12, sandPale * uSpeck);
 vec3 songCol = mix(skinCol * vec3(0.62, 0.85, 0.55), lin(0.22, 0.42, 0.26), 0.35 + 0.4 * sat(sA.r));
 skinCol = mix(skinCol, songCol, song * 0.6);
 skinCol = mix(skinCol, skinCol * mix(vec3(1.3, 0.92, 0.5), vec3(1.25, 0.55, 0.4), uYellowRed), sB.g * 0.45);
@@ -517,9 +653,9 @@ skinCol = mix(skinCol, skinCol * 1.2 + 0.03, mang * 0.55);
 skinCol = mix(skinCol, uSkinStain * 0.7, rust * 0.5);
 skinCol *= 1.0 - 0.82 * skinCrack;
 float skinRough = mix(uSkinRough, 0.3, max(xian * 0.8, wax));
-float skinHeight = ((nGrain.a - 0.5) * 0.0075 * reliefGrain + ((nFine.a - 0.5) * 0.003 + (nFine.g - 0.5) * 0.0012 - pits * 0.003) * reliefFine)
-    * uGrain * (1.0 - 0.6 * mang) * (1.0 - 0.75 * max(xian, wax))
-  + (nMed.g - 0.5) * 0.013 + (nMed.a - 0.5) * 0.006 + (nBig.g - 0.5) * 0.02 - crackGroove * 0.006;
+skinRough = mix(skinRough, 0.34, sandPale * 0.8); // a glassy grain catches the lamp as the stone turns
+// (the skin's relief goes to the normal by its exact slope, jSlope; only the cracks' grooves are left to the height)
+float skinHeight = -crackGroove * 0.006;
 
 // ---- the cut through the stone: crystal grains, and what the flesh is just here
 // Jade is a felt of interlocked crystals, never a tidy mosaic: the lattice is
