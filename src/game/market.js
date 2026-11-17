@@ -3,6 +3,7 @@
 import { makeStone } from '../stone/gen.js';
 import { StoneView } from '../stone/view.js';
 import { MINES, SKINS } from './lore.js';
+import { VOICES } from './patter.js';
 import { nice } from './game.js';
 import { rng } from '../stone/noise.js';
 
@@ -14,38 +15,41 @@ function freshSeed() {
   return a[0] || 1;
 }
 
-/** The vendor's patter. It leans on whatever the skin shows -- and is not to be trusted. */
-export function pitchFor(stone) {
+/**
+ * The vendor's patter in voice `V` (from patter.js): an opener, two remarks on
+ * whatever the skin shows, and a closer. It is not to be trusted.
+ */
+export function pitchFor(stone, V) {
   const { def, app } = stone;
   const R = rng(def.seed ^ 0x7a11);
-  const M = MINES[def.mine];
+  const fill = (s) => s.replaceAll('{M}', MINES[def.mine].name).replaceAll('{S}', SKINS[def.skin].name);
+  const say = (key) => fill(R.pick(V[key]));
   const visible = [...app.knownCracks].filter(Boolean).length;
-  const lines = [];
-  lines.push(R.pick([
-    `正宗${M.name}的料，我自己上山收的。`,
-    `${M.name}老坑，這種皮殼現在很難收到了。`,
-    `老闆好眼光，這塊${M.name}今天剛到。`,
-    `這塊${M.name}放我這三天，已經五個人問過了。`,
-  ]));
-  // a plain-looking stone at a fancy price: say why
-  if (app.hope >= 0.3) lines.push(R.pick([`${M.name}出這種水頭的不多，行家都賭它石心有貨，價錢才站在這。`, '別看皮上沒東西，這種料十塊裡總有一塊切出高貨，賭性在這。']));
-  if (app.shellMean.g > 0.2) lines.push(R.pick(['你看這松花，一片一片的，色絕對吃進去了！', '松花這麼濃，底下沒有綠我頭給你。']));
-  else if (app.shellMean.g > 0.05) lines.push(R.pick(['皮上有松花，賭它裡面走色。', '零星有點松花，賭個色根不過分吧。']));
-  if (def.green.bands.length) lines.push('這條蟒帶纏過去，色就跟著蟒走。');
-  if (def.grain < 0.8) lines.push(R.pick(['你摸這砂，又細又緊，種老。', '皮殼這麼緊，裡面起碼冰種起跳。']));
-  else if (def.grain > 1.15) lines.push('砂是粗了點，但個頭大，手鐲位夠。');
-  if (app.shellMean.blk > 0.12) lines.push('有點癬沒關係，癬下常有高色。');
-  if (visible >= 3) lines.push(R.pick(['裂是有幾條，都是皮上的，不進去。', '有裂才便宜嘛，避開裂照樣出牌子。']));
-  else if (visible === 0) lines.push('整塊找不到一條裂，完美。');
-  if (def.skin === 'waxShell' || def.skin === 'waterSkin') lines.push('皮這麼薄，你自己打燈看，水頭多長。');
-  lines.push(R.pick(['價錢好談，但真的沒什麼空間了。', '賭石嘛，一刀下去誰也說不準。', '你要是切漲了，記得回來請我喝茶。', '我開這個價，已經是交朋友了。']));
-  return lines.slice(0, 4).join('');
+  const cm = def.unitCm * 2; // the size the sheet shows
+  const traits = [];
+  if (app.shellMean.g > 0.2) traits.push('songStrong');
+  else if (app.shellMean.g > 0.05) traits.push('songWeak');
+  if (def.green.bands.length) traits.push('band');
+  if (def.grain < 0.8) traits.push('fine');
+  else if (def.grain > 1.15) traits.push('coarse');
+  if (app.shellMean.blk > 0.12) traits.push('black');
+  if (visible >= 3) traits.push('cracksMany');
+  else if (visible === 0) traits.push('cracksNone');
+  if (def.skin === 'waxShell' || def.skin === 'waterSkin') traits.push('thinSkin');
+  if (cm >= 16) traits.push('big');
+  else if (cm <= 9) traits.push('small');
+  // which two get said changes from stone to stone; a plain skin at a fancy price always gets explained
+  for (let i = traits.length - 1; i > 0; i--) {
+    const j = Math.floor(R() * (i + 1));
+    [traits[i], traits[j]] = [traits[j], traits[i]];
+  }
+  if (app.hope >= 0.3) traits.unshift('hope');
+  return [say('open'), ...traits.slice(0, 2).map(say), say('close')].join('');
 }
 
 async function grow(seed, factory, noiseTex, opt) {
   const stone = await StoneView.create(makeStone(seed, opt), factory, noiseTex);
   stone.price = nice(Math.max(300, stone.app.askPrice));
-  stone.pitch = pitchFor(stone);
   stone.title = `${MINES[stone.def.mine].name} · ${SKINS[stone.def.skin].name}`;
   return stone;
 }
@@ -72,5 +76,13 @@ export async function stockStall(factory, noiseTex, cash, { count = STALL_SIZE, 
       stones[worst] = await grow(freshSeed(), factory, noiseTex, { mine: cheapMines[tries % cheapMines.length], sizeScale: 0.8 });
     }
   }
+  // the vendor talks each stone up a different way: no two on the cloth in the same voice
+  const R = rng(seed || freshSeed());
+  const voices = [...VOICES];
+  for (let i = voices.length - 1; i > 0; i--) {
+    const j = Math.floor(R() * (i + 1));
+    [voices[i], voices[j]] = [voices[j], voices[i]];
+  }
+  stones.forEach((s, i) => { s.pitch = pitchFor(s, voices[i % voices.length]); });
   return stones;
 }
