@@ -12,13 +12,46 @@ import { TABLE } from '../scene/room.js';
 /** How far back the saw waits (size R): well behind the stone, but with its own table still on the bench. */
 const sawPark = (R) => Math.min(R * 4 + 9, -TABLE.z0 - R * 1.3 - 0.8);
 
-const _probe = new THREE.Vector3();
+const _probe = new THREE.Vector3(), _hinge = new THREE.Vector3();
 const TAU = Math.PI * 2;
 const PALE = new THREE.Color(0.61, 0.6, 0.52); // stone ground to powder: whatever it was, it is paler
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const UP = V(0, 1, 0), X = V(1, 0, 0), Z = V(0, 0, 1);
 const SHOW = V(0, 0.8, 0.6).normalize(); // where a cut face is turned: up, tilted at the player
 const FLIP = new THREE.Quaternion().setFromAxisAngle(X, Math.PI);
+
+// The whole torch as rings of test points, [distance back from the face, radius], every
+// 0.06 from the face to the tail cap, its radius taken off the parts in tools/rig.js a
+// touch generously: bezel and finned head, the taper and copper ring, then the grip, which
+// carries the pocket clip on one side (the clip stands as proud as the head, so that
+// stretch is treated as if the clip went all the way round), and the tail cap. Rings this
+// close keep a curve of stone from bulging in between two of them. Every point of the torch
+// must stay out of stone and felt.
+const torchRadius = (b) => (b < 0.42 ? 0.142 : b < 0.48 ? 0.139 : b < 0.59 ? 0.124 : b < 1.02 ? 0.141 : 0.114);
+const TORCH_PROFILE = Array.from({ length: 21 }, (_, i) => [i * 0.06, torchRadius(i * 0.06)]).concat([[1.204, 0.09]]);
+const AROUND = 14; // test points round each ring of the body
+// The face is what is pressed to the skin, so it is tested closely: the crenellated rim and
+// the roots of its teeth with twice the points, and two rings across the lens (plus its centre).
+const FACE_RINGS = [[0, 0.142, 28], [0.024, 0.142, 28], [0, 0.105, 14], [0, 0.06, 10]];
+// daylight between torch and skin, a millimetre: enough to cover what can slip between test
+// points (checked against every vertex of the torch), and so they never z-fight
+const STONE_GAP = 0.01;
+const BENCH_GAP = 0.01; // the torch keeps a millimetre off the felt (the bench top is y = 0)
+
+/** How far the torch's lowest point stands above the bench (negative: it is in the felt). */
+function benchClearance(axis, face) {
+  const reach = Math.sqrt(Math.max(0, 1 - axis.y * axis.y)); // how far down a ring of radius 1 reaches
+  let low = Infinity;
+  for (const [back, r] of TORCH_PROFILE) low = Math.min(low, face.y + axis.y * back - r * reach);
+  return low - BENCH_GAP;
+}
+
+/** Turn a torch axis toward `target` by `angle` (never past it). */
+function turnToward(axis, target, angle) {
+  _hinge.crossVectors(axis, target);
+  if (_hinge.lengthSq() < 1e-8) return axis;
+  return axis.clone().applyAxisAngle(_hinge.normalize(), Math.min(angle, axis.angleTo(target)));
+}
 
 export function createActions({ stage, anim, fx, sfx, torch, grinder, saw }) {
   const wait = (s) => anim.wait(s);
@@ -108,38 +141,92 @@ export function createActions({ stage, anim, fx, sfx, torch, grinder, saw }) {
     const tilt = 0.16 + 0.24 * Math.min(1, Math.max(0, (facing - 0.6) / 0.35));
     const right = X.clone().applyQuaternion(stage.camera.quaternion), camUp = UP.clone().applyQuaternion(stage.camera.quaternion);
     const lean = right.multiplyScalar(0.9).addScaledVector(camUp, -0.35).projectOnPlane(nW).normalize();
-    const axis = nW.clone().multiplyScalar(Math.cos(tilt)).addScaledVector(lean, Math.sin(tilt)).normalize();
+    let axis = nW.clone().multiplyScalar(Math.cos(tilt)).addScaledVector(lean, Math.sin(tilt)).normalize();
 
-    // Back the torch off along the normal until no part of it is inside the
-    // stone. The stone's own distance field says how deep each test point is,
-    // so this holds on any curve, hollow or ridge, not just on a flat patch.
+    // How deep the torch, laid along `ax` with its face at `face`, is in the
+    // stone at its deepest test point (negative: clear by that much), and which
+    // way is out there. The stone's own distance field says how deep each point
+    // is and its gradient points out, so this holds on any curve, hollow, ridge
+    // or overhang, not just on a flat patch.
     const sd = piece.sdf || (piece.sdf = stone.field.pieceSd({ planes: piece.planes }, stone.windows));
-    const e1 = new THREE.Vector3().crossVectors(axis, Math.abs(axis.y) < 0.9 ? UP : X).normalize();
-    const e2 = new THREE.Vector3().crossVectors(axis, e1);
-    piece.mesh.updateWorldMatrix(true, false);
-    let lift = 0;
-    for (let pass = 0; pass < 5; pass++) {
-      let worst = 0;
-      for (const [back, radius] of TORCH.rings) {
-        for (let k = 0; k < 12; k++) {
-          const a = (k / 12) * Math.PI * 2;
-          _probe.copy(hit.point).addScaledVector(nW, lift).addScaledVector(axis, back)
-            .addScaledVector(e1, Math.cos(a) * radius).addScaledVector(e2, Math.sin(a) * radius);
-          piece.mesh.worldToLocal(_probe);
-          const inside = -sd(_probe.x, _probe.y, _probe.z) * stone.scale;
-          if (inside > worst) worst = inside;
-        }
+    const mesh = piece.mesh;
+    mesh.updateWorldMatrix(true, false);
+    const deepPt = new THREE.Vector3(), out = new THREE.Vector3();
+    const depthAt = (back, r, a, ax, face, e1, e2) => {
+      _probe.copy(face).addScaledVector(ax, back).addScaledVector(e1, Math.cos(a) * r).addScaledVector(e2, Math.sin(a) * r);
+      mesh.worldToLocal(_probe);
+      return -sd(_probe.x, _probe.y, _probe.z) * stone.scale;
+    };
+    const deepest = (ax, face) => {
+      const e1 = new THREE.Vector3().crossVectors(ax, Math.abs(ax.y) < 0.9 ? UP : X).normalize();
+      const e2 = new THREE.Vector3().crossVectors(ax, e1);
+      let worst = -Infinity;
+      const test = (back, r, a) => { const d = depthAt(back, r, a, ax, face, e1, e2); if (d > worst) { worst = d; deepPt.copy(_probe); } };
+      for (const [back, r] of TORCH_PROFILE) for (let k = 0; k < AROUND; k++) test(back, r, (k / AROUND) * TAU);
+      for (const [back, r, n] of FACE_RINGS) for (let k = 0; k < n; k++) test(back, r, ((k + 0.5) / n) * TAU);
+      test(0, 0, 0);
+      const h = 0.003, p = deepPt;
+      out.set(
+        sd(p.x + h, p.y, p.z) - sd(p.x - h, p.y, p.z),
+        sd(p.x, p.y + h, p.z) - sd(p.x, p.y - h, p.z),
+        sd(p.x, p.y, p.z + h) - sd(p.x, p.y, p.z - h),
+      );
+      if (out.lengthSq() < 1e-12) out.copy(nW); else out.transformDirection(mesh.matrixWorld);
+      return worst;
+    };
+    // Move the torch's face, from `start`, until no test point is in the stone
+    // (pushed out along the skin's own normal at the deepest one) and, if asked,
+    // none in the felt (pushed up). Several rounds, since pushing out of one
+    // bump can press into the next; never returns a pose that is in either.
+    const settle = (ax, start, bench) => {
+      const face = start.clone();
+      for (let i = 0; i < 40; i++) {
+        const inside = deepest(ax, face);
+        const short = bench ? benchClearance(ax, face) : 0;
+        if (inside <= -STONE_GAP && short >= 0) return face;
+        if (inside > -STONE_GAP) face.addScaledVector(out, inside + STONE_GAP + 0.002);
+        if (short < 0) face.y += -short + 0.001;
       }
-      if (worst <= 0.0015) break;
-      lift += worst + 0.003;
+      // still wedged between stone and felt: walk straight away from the stone, and up, until it is clear
+      const away = nW.clone().setY(0);
+      if (away.lengthSq() < 1e-6) away.copy(lean);
+      away.setY(0).normalize().addScaledVector(UP, 0.35).normalize();
+      for (let i = 0; i < 120; i++) {
+        if (deepest(ax, face) <= -STONE_GAP && (!bench || benchClearance(ax, face) >= 0)) break;
+        face.addScaledVector(away, 0.02);
+      }
+      return face;
+    };
+
+    // ... and never into the bench. Low on a stone the skin faces down, and a
+    // torch laid along it would run through the felt. There it is turned about
+    // the spot it touches until its lowest point clears the bench top: first
+    // round to the side and a little up (to the right of the view, or to the left
+    // on a face that looks left), so it lies along the felt beside the stone
+    // rather than pointing its tail at the camera over the glow; and only if
+    // that is not enough, straight up. The last word is settle's, with stone
+    // and felt both in it, so whatever the angle the torch ends up in neither.
+    const rightH = X.clone().applyQuaternion(stage.camera.quaternion).setY(0).normalize();
+    const side = nW.dot(rightH) < -0.25 ? -1 : 1;
+    const aside = rightH.multiplyScalar(side).addScaledVector(UP, 0.6).normalize();
+    let face = settle(axis, hit.point, false);
+    for (let round = 0; round < 3 && benchClearance(axis, face) < 0; round++) {
+      for (let s = 0; s < 40 && benchClearance(axis, face) < 0; s++) {
+        let next = axis.angleTo(aside) > 0.01 ? turnToward(axis, aside, 0.06) : null;
+        if (!next || next.dot(nW) < 0.35) next = axis.angleTo(UP) > 0.01 ? turnToward(axis, UP, 0.06) : null;
+        if (!next || next.dot(nW) < 0.2) break;
+        axis = next;
+      }
+      face = settle(axis, hit.point, false);
     }
-    lift += 0.004; // a hair of daylight, so the bezel never z-fights the skin
-    const face = hit.point.clone().addScaledVector(nW, lift);
+    face = settle(axis, face, true);
     torch.group.position.copy(face);
     torch.group.quaternion.setFromUnitVectors(Z, axis);
 
-    // The side of the bezel that stands off the stone is where light gets out.
-    const gap = lean.clone().multiplyScalar(-1).projectOnPlane(axis).normalize();
+    // The side of the bezel that stands off the stone is where light gets out:
+    // opposite to the way the torch is tipped from the normal.
+    const tipped = axis.clone().projectOnPlane(nW);
+    const gap = (tipped.lengthSq() > 1e-6 ? tipped : lean).clone().multiplyScalar(-1).projectOnPlane(axis).normalize();
     torch.leak.position.copy(gap).applyQuaternion(torch.group.quaternion.clone().invert()).multiplyScalar(TORCH.rim * 0.85);
     torch.light.position.copy(face).addScaledVector(gap, TORCH.rim * 0.9).addScaledVector(nW, 0.02);
     piece.u.uTorchRim.value = TORCH.rim / stone.scale;
@@ -476,15 +563,20 @@ export function createActions({ stage, anim, fx, sfx, torch, grinder, saw }) {
     await carry(stone, piece, quat, piece.holder.position.x, piece.holder.position.z, 0.6);
   }
 
-  /** A shower of coins and light for a cut that came good. */
-  function celebrate(at, tier, size = 1) {
+  // the coins make their own noise: the handful leaving, and each one as it lands
+  fx.coins.onSpray = (count) => sfx.coinSpray(count);
+  fx.coins.onClink = (force, metal) => sfx.coinClink(force, metal);
+
+  /** A shower of coins and light for a cut that came good. `stone`, if given, is what the coins bounce off. */
+  function celebrate(at, tier, size = 1, stone = null) {
     // sized to the stone, so a pebble is not buried under its own winnings
     const s = Math.min(1.1, Math.max(0.3, size * 0.75));
     stage.flash(0.12 + 0.1 * tier, [1, 0.9, 0.6]);
     stage.shockwave(at, 0.5 + 0.3 * tier);
     stage.impact(at, { zoom: 0.25 * tier, chroma: 0.3 * tier });
     stage.glow(0.12 * tier);
-    fx.coins.emit(at.clone().add(V(0, 1.2 * s, 0)), { count: 14 * tier * tier, speed: (6 + tier * 2) * s, dir: UP, spread: 0.8, up: 5 * s, scale: [0.8 * s, 1.2 * s], life: 3.2 });
+    fx.coins.collideWith(stone);
+    fx.coins.emit(at.clone().add(V(0, 1.2 * s, 0)), { count: 14 * tier * tier, speed: (6 + tier * 2) * s, dir: UP, spread: 0.8, up: 5 * s, scale: [0.8 * s, 1.2 * s], life: 4.6 });
     fx.sparks.emit(at.clone().add(V(0, 0.8 * s, 0)), { count: 40 * tier, speed: 9 * s, color: [3, 2.2, 0.8], life: 0.7, gravity: 0.2 });
     setTimeout(() => stage.glow(0), 1800);
   }

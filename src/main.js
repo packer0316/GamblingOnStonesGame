@@ -7,6 +7,7 @@ import { Animator, ease } from './util/anim.js';
 import { createParticles } from './fx/particles.js';
 import { createSfx } from './audio/sfx.js';
 import { createTorch, createGrinder, createSaw } from './tools/rig.js';
+import { TABLE } from './scene/room.js';
 import { createActions } from './game/actions.js';
 import { createGame, nice, money } from './game/game.js';
 import { stockStall } from './game/market.js';
@@ -40,7 +41,7 @@ async function boot() {
   stage.scene.add(torch.group, torch.light, grinder.group, saw.root);
   const actions = createActions({ stage, anim, fx, sfx, torch, grinder, saw });
   const game = createGame();
-  if (params.has('cash')) game.state.cash = Number(params.get('cash')); // look-dev: afford anything
+  if (TUNING.gm && params.has('cash')) game.state.cash = Number(params.get('cash')); // look-dev: afford anything
 
   let mode = 'market';
   let stall = [];
@@ -57,6 +58,7 @@ async function boot() {
   // ------------------------------------------------------------ HUD
   const hud = createHud(document.getElementById('hud'), {
     sfx,
+    gm: TUNING.gm,
     onPick: (i) => inspect(i),
     onHover: (i) => hoverStall(i),
     onRefresh: () => openMarket(),
@@ -264,6 +266,67 @@ async function boot() {
     setRay(x, y);
     return raycaster.intersectObjects(stone.pieces.map((p) => p.mesh), false)[0] || null;
   };
+  /**
+   * Where the torch stays while the pointer is off the stone but over the bench:
+   * the stone's edge, as the camera sees it, on the line from the pointer to the
+   * middle of the nearest piece. So with the pointer below a stone the torch sits
+   * at its foot (aimTorch then holds it clear of the felt). The edge is found on
+   * the stone's distance field -- a raycast at the mesh costs ~3 ms, this a
+   * fraction of that -- and only the final point is hit for real.
+   */
+  const _edge = { inv: new THREE.Matrix4(), ray: new THREE.Ray(), v: new THREE.Vector2(), c: new THREE.Vector3(), sphere: new THREE.Sphere() };
+  function torchEdgeHit(x, y) {
+    if (!stone) return null;
+    setRay(x, y);
+    const { ray: r } = raycaster;
+    if (r.direction.y > -1e-4) return null; // at the wall or the room: the torch is put down
+    const onBench = r.origin.clone().addScaledVector(r.direction, -r.origin.y / r.direction.y);
+    if (onBench.x < TABLE.x0 || onBench.x > TABLE.x1 || onBench.z < TABLE.z0 || onBench.z > TABLE.z1) return null; // off the felt
+    const P = ndc.clone();
+    // the piece whose middle is nearest the pointer on screen
+    let best = null, bestD = Infinity;
+    for (const piece of stone.pieces) {
+      const m = piece.mesh, g = m.geometry;
+      if (!g.boundingSphere) g.computeBoundingSphere();
+      m.updateWorldMatrix(true, false);
+      const C = _edge.c.copy(g.boundingSphere.center).applyMatrix4(m.matrixWorld).project(stage.camera);
+      const d = Math.hypot(C.x - P.x, C.y - P.y);
+      if (d < bestD) { bestD = d; best = { piece, C: new THREE.Vector2(C.x, C.y) }; }
+    }
+    if (!best || bestD < 1e-4) return null;
+    const { piece, C } = best, mesh = piece.mesh, sphere = _edge.sphere.copy(mesh.geometry.boundingSphere);
+    const sd = piece.sdf || (piece.sdf = stone.field.pieceSd({ planes: piece.planes }, stone.windows));
+    _edge.inv.copy(mesh.matrixWorld).invert();
+    const at = (s) => _edge.v.copy(P).lerp(C, s);
+    // does the camera ray through this screen point meet the stone? (sphere-traced, in the piece's own units)
+    const meets = (s) => {
+      raycaster.setFromCamera(at(s), stage.camera);
+      const lr = _edge.ray.copy(raycaster.ray).applyMatrix4(_edge.inv);
+      const oc = lr.origin.clone().sub(sphere.center);
+      const b = oc.dot(lr.direction), c = oc.lengthSq() - sphere.radius * sphere.radius, disc = b * b - c;
+      if (disc < 0) return false;
+      let t = Math.max(0, -b - Math.sqrt(disc));
+      const t1 = -b + Math.sqrt(disc), p = new THREE.Vector3();
+      for (let i = 0; i < 80 && t < t1; i++) {
+        lr.at(t, p);
+        const d = sd(p.x, p.y, p.z);
+        if (d < 0.002) return true;
+        t += Math.max(d * 0.85, 0.003);
+      }
+      return false;
+    };
+    if (!meets(1)) return null;
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 10; i++) { const mid = (lo + hi) / 2; if (meets(mid)) hi = mid; else lo = mid; }
+    // the real hit, a few pixels inside the edge (further in if the silhouette is ragged there)
+    const step = 6 / canvas.clientHeight / Math.max(bestD, 1e-3);
+    for (let k = 1; k <= 5; k++) {
+      raycaster.setFromCamera(at(Math.min(1, hi + step * k)), stage.camera);
+      const h = raycaster.intersectObject(mesh, false)[0];
+      if (h) return h;
+    }
+    return null;
+  }
   const hitStall = (x, y) => {
     setRay(x, y);
     const hit = raycaster.intersectObjects(stall.map((s) => s.whole.mesh), false)[0];
@@ -310,7 +373,7 @@ async function boot() {
     const tier = pct >= 150 ? 3 : pct >= 60 ? 2 : pct >= 15 ? 1 : pct > -3 ? 0 : pct > -40 ? -1 : -2;
     hud.showDelta({ title, pct, lines: commentary(summary), tier });
     sfx.verdict(tier);
-    if (tier >= 1) actions.celebrate(at, tier, stone.radius);
+    if (tier >= 1) actions.celebrate(at, tier, stone.radius, stone);
     else if (tier < 0) { stage.shake(0.03 * -tier); stage.flash(0.06, [0.4, 0.5, 0.45]); if (summary.cracks) sfx.crack(); }
     hud.log(`${cut ? '切一刀' : WINDOW_SPECS[kind].name} −${money(fee).slice(1)}　${title} ${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(0)}%`, flat ? '' : pct > 0 ? 'up' : 'down');
     return { pct, tier };
@@ -507,7 +570,10 @@ async function boot() {
     if (e.buttons && tool !== 'torch') return; // orbiting
     const hit = hitStone(e.clientX, e.clientY);
     if (tool === 'torch') {
-      if (hit) { actions.aimTorch(hit, 1, TORCH_WHITE); torchSlide(hit.point); } else { actions.torchOff(stone); torchTrail = null; }
+      // off the stone but over the bench (below it, or beside it on the felt) the torch is not put
+      // down: it stays on the stone, at its edge on the way to the pointer -- held as low as it can be
+      const at = hit || torchEdgeHit(e.clientX, e.clientY);
+      if (at) { actions.aimTorch(at, 1, TORCH_WHITE); torchSlide(at.point); } else { actions.torchOff(stone); torchTrail = null; }
     } else if (tool && WINDOW_SPECS[tool]) {
       for (const p of stone.pieces) p.u.uMarkOn.value = 0;
       if (hit) {
@@ -551,7 +617,7 @@ async function boot() {
   window.addEventListener('keydown', (e) => {
     if (hud.modalOpen || e.repeat) return;
     if (e.target instanceof HTMLInputElement) return; // typing an amount, not picking a tool
-    if (e.key === '`') { e.preventDefault(); hud.toggleGm(); return; }
+    if (e.key === '`' && TUNING.gm) { e.preventDefault(); hud.toggleGm(); return; }
     const k = e.key.toLowerCase();
     if (k === 'escape') { if (pendingCut) cancelCut(); else if (tool) setTool(null); else if (mode === 'inspect') backToMarket(); return; }
     if (mode === 'market') return;
@@ -592,7 +658,7 @@ async function boot() {
 
   // Hooks for tools/shot.mjs and tools/smoke.mjs.
   window.__game = {
-    stage, game, hud, actions, anim, fx, sfx, THREE,
+    stage, game, hud, actions, anim, fx, sfx, THREE, torch,
     get stone() { return stone; }, get stall() { return stall; }, get mode() { return mode; }, get tool() { return tool; },
     inspect, buy, sell, setTool, backToMarket, openMarket, doCut, cancelCut,
     /** Ray from outside the stone inward along -dir; returns the hit on the focused stone. */

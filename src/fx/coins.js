@@ -130,9 +130,11 @@ class Coins {
       id, state: 0, life: 0, wait: 0, r: RADIUS, h: RADIUS * THICK,
       px: 0, py: 0, pz: 0, vx: 0, vy: 0, vz: 0, qx: 0, qy: 0, qz: 0, qw: 1, wx: 0, wy: 0, wz: 0,
       ax: 1, ay: 0, az: 0, nx: 0, ny: 1, nz: 0, bx: 0, by: 0, bz: 1, // its three axes in the world; n is the one through the hole
-      down: false, still: 0, since: 0, hush: 0,
+      tx: 0, ty: 1, tz: 0, // n, turned to look up: the way out of its upper face
+      down: false, still: 0, since: 0, hush: 0, tries: 0,
     }));
     this.order = [];
+    this.near = [];
     this.grid = new Map();
     // contacts of the coin being solved
     this.k = { n: 0, rx: new Float32Array(64), ry: new Float32Array(64), rz: new Float32Array(64), nx: new Float32Array(64), ny: new Float32Array(64), nz: new Float32Array(64), d: new Float32Array(64), kind: new Uint8Array(64) };
@@ -167,7 +169,7 @@ class Coins {
       c.wz = (c.az * Math.cos(a) + c.bz * Math.sin(a)) * flip + c.nz * (Math.random() - 0.5) * 12;
       c.life = life * (0.85 + Math.random() * 0.3);
       c.wait = Math.random() * span;
-      c.state = 1; c.down = false; c.still = 0; c.since = 0; c.hush = 0;
+      c.state = 1; c.down = false; c.still = 0; c.since = 0; c.hush = 0; c.tries = 0;
     }
     this.onSpray?.(count);
   }
@@ -282,36 +284,61 @@ class Coins {
     // ---- what is it touching?
     const k = this.k;
     k.n = 0;
-    const side = c.ny >= 0 ? 1 : -1; // which face is underneath
+    // Which face is underneath: 1 or -1 lying down, fading to 0 as it comes up on edge. A rim is
+    // round, so a coin stood on it has nothing to balance on and goes over the way it leans.
+    const side = Math.max(-1, Math.min(1, c.ny / 0.3));
     const ux = c.nx * side, uy = c.ny * side, uz = c.nz * side;
+    const hard = c.ny >= 0 ? 1 : -1, fx = c.nx * hard, fy = c.ny * hard, fz = c.nz * hard; // its upper face, for what pokes it from below
     const fall = (Math.abs(c.vy) + w * c.r) * dt; // how far a point of it can have come since the last step
     const gx = Math.floor(c.px / CELL), gz = Math.floor(c.pz / CELL);
-    let near = null;
+    const near = this.near;
+    near.length = 0;
     for (let i = gx - 1; i <= gx + 1; i++) for (let j = gz - 1; j <= gz + 1; j++) {
       const cell = grid.get(i * 4096 + j);
       if (!cell) continue;
       for (const o of cell) {
-        const dx = o.px - c.px, dz = o.pz - c.pz, reach = o.r + c.r;
-        if (dx * dx + dz * dz < reach * reach) (near ||= []).push(o);
+        const dx = c.px - o.px, dz = c.pz - o.pz, reach = o.r + c.r;
+        if (dx * dx + dz * dz < reach * reach) near.push(o);
       }
     }
     let deep = 0, lift = 0;
+    const steep = Math.sqrt(Math.max(0, 1 - c.ny * c.ny));
+    if (steep > 0.02) {
+      const rx = (c.nx * c.ny / steep) * c.r - ux * c.h, ry = ((c.ny * c.ny - 1) / steep) * c.r - uy * c.h, rz = (c.nz * c.ny / steep) * c.r - uz * c.h;
+      const y = c.py + ry;
+      if (y < 0) { lift = -y; deep = this.touch(rx, ry, rz, 0, 1, 0, -y, 0); }
+    }
     for (let p = 0; p < PROBES.length; p++) {
       const a = PROBES[p][0] * c.r, b = PROBES[p][1] * c.r;
       // the point of the under face below this probe, from the centre
       const rx = c.ax * a + c.bx * b - ux * c.h, ry = c.ay * a + c.by * b - uy * c.h, rz = c.az * a + c.bz * b - uz * c.h;
       const y = c.py + ry;
       if (y < 0) { lift = Math.max(lift, -y); deep = Math.max(deep, this.touch(rx, ry, rz, 0, 1, 0, -y, 0)); }
-      if (near) {
+      if (near.length) {
         const x = c.px + rx, z = c.pz + rz;
-        for (const o of near) {
-          const os = o.ny >= 0 ? 1 : -1, tx = o.nx * os, ty = o.ny * os, tz = o.nz * os; // the way its top face looks
-          const dx = x - o.px, dy = y - o.py, dz = z - o.pz;
-          const along = dx * tx + dy * ty + dz * tz, over = along - o.h; // above its top face by this much
-          if (over >= 0 || over < -(2.4 * o.h + fall)) continue; // clear of it, or right under it (then it is this one that is being lain on)
-          if (dx * dx + dy * dy + dz * dz - along * along > o.r * o.r) continue; // beside it, not on it
-          deep = Math.max(deep, this.touch(rx, ry, rz, tx, ty, tz, -over, 1));
-        }
+        for (const o of near) deep = Math.max(deep, this.onto(o, rx, ry, rz, x - o.px, y - o.py, z - o.pz, fall));
+      }
+    }
+    for (const o of near) {
+      const tx = o.tx, ty = o.ty, tz = o.tz;
+      // The two places coins really meet, found exactly rather than left to fall between probes:
+      // the point of this one's rim that is lowest against the other's face ...
+      const lean = c.nx * tx + c.ny * ty + c.nz * tz, tilt = Math.sqrt(Math.max(0, 1 - lean * lean));
+      if (tilt > 0.02) {
+        const rx = ((c.nx * lean - tx) / tilt) * c.r - ux * c.h, ry = ((c.ny * lean - ty) / tilt) * c.r - uy * c.h, rz = ((c.nz * lean - tz) / tilt) * c.r - uz * c.h;
+        deep = Math.max(deep, this.onto(o, rx, ry, rz, c.px + rx - o.px, c.py + ry - o.py, c.pz + rz - o.pz, fall));
+      }
+      // ... and the point of the other's top edge that stands highest into this one
+      const back = o.nx * fx + o.ny * fy + o.nz * fz, cant = Math.sqrt(Math.max(0, 1 - back * back));
+      if (cant > 0.02) {
+        deep = Math.max(deep, this.under(c, fx, fy, fz,
+          o.px + ((fx - o.nx * back) / cant) * o.r + tx * o.h - c.px, o.py + ((fy - o.ny * back) / cant) * o.r + ty * o.h - c.py, o.pz + ((fz - o.nz * back) / cant) * o.r + tz * o.h - c.pz, tx, ty, tz));
+      }
+      // and round the rest of that edge
+      for (let p = 0; p < 14; p++) {
+        const a = PROBES[p][0] * o.r, b = PROBES[p][1] * o.r;
+        deep = Math.max(deep, this.under(c, fx, fy, fz,
+          o.px + o.ax * a + o.bx * b + tx * o.h - c.px, o.py + o.ay * a + o.by * b + ty * o.h - c.py, o.pz + o.az * a + o.bz * b + tz * o.h - c.pz, tx, ty, tz));
       }
     }
     for (const s of this.solids) this.strike(c, s);
@@ -361,23 +388,82 @@ class Coins {
     if (!k.n) { c.still = 0; return; }
     c.down = true;
     c.since += dt;
-    if (hit > 1.6 && c.hush <= 0) { c.hush = 0.07; this.onClink?.(Math.min(1, hit / 11), metal); }
-    const roll = Math.exp(-3.2 * dt), slide = Math.exp(-2.2 * dt); // rolling and sliding both die on cloth
+    // (not in its last moments: coins dropping as the heap under them is cleared away should not be heard)
+    if (hit > 1.6 && c.hush <= 0 && c.life > 0.9) { c.hush = 0.07; this.onClink?.(Math.min(1, hit / 11), metal); }
+    const onEdge = 1 - Math.min(1, Math.abs(c.ny) / 0.5); // 1 stood on its rim, 0 lying down
+    const roll = Math.exp(-(3.2 + 5 * onEdge) * dt), slide = Math.exp(-(2.2 + 4 * onEdge) * dt); // rolling and sliding both die on cloth
     c.wx *= roll; c.wy *= roll; c.wz *= roll;
     c.vx *= slide; c.vz *= slide;
     const speed = Math.hypot(c.vx, c.vy, c.vz), turn = Math.hypot(c.wx, c.wy, c.wz);
-    if (Math.abs(c.ny) < 0.45 && speed < 1.2 && turn < 4) {
-      // balanced on its edge: no coin stays there. Over it goes, the way it is already leaning
-      const lean = c.ny >= 0 ? 1 : -1, hx = -c.nz, hz = c.nx, hl = Math.hypot(hx, hz) || 1; // (n x up: turning about it lifts n)
-      c.wx += (hx / hl) * lean * 14 * dt; c.wz += (hz / hl) * lean * 14 * dt;
-      c.still = 0;
-      return;
+    if (Math.abs(c.ny) < 0.06) {
+      // dead upright: the least thing tips it, and here that is which coin it happens to be
+      const way = c.ny !== 0 ? Math.sign(c.ny) : c.id % 2 ? 1 : -1, hx = -c.nz, hz = c.nx, hl = Math.hypot(hx, hz) || 1; // (n x up: turning about it lifts n)
+      c.wx += (hx / hl) * way * 30 * dt; c.wz += (hz / hl) * way * 30 * dt;
     }
+    if (onEdge > 0.3) { c.still = 0; return; } // not a way to lie: wait for it to go over
     if (speed < 0.45 && turn < 2.2) c.still += dt; else c.still = 0;
-    if (c.still > 0.16 || c.since > 2.6) {
+    if ((c.still > 0.16 || c.since > 2.6) && this.settle(c)) {
       c.state = 3;
       c.vx = c.vy = c.vz = c.wx = c.wy = c.wz = 0;
     }
+  }
+
+  /**
+   * May this coin stop where it is? Not if that leaves it standing in a coin already at
+   * rest. The contacts above keep coins apart nearly always; in a heap of tilted coins two
+   * edges can still cross between the points that are tested. So before a coin is allowed
+   * to rest it is checked against its neighbours all round both faces, and if it fails it
+   * is lifted, laid flatter and left to settle again -- or, after a few tries, tipped off
+   * the heap to one side.
+   */
+  settle(c) {
+    let worst = 0, into = null;
+    for (const o of this.c) {
+      if (o.state !== 3 || o === c) continue;
+      const dx = o.px - c.px, dz = o.pz - c.pz, reach = o.r + c.r;
+      if (dx * dx + dz * dz >= reach * reach || Math.abs(o.py - c.py) > reach) continue;
+      const d = Math.max(sunk(c, o), sunk(o, c));
+      if (d > worst) { worst = d; into = o; }
+    }
+    if (!into || worst < 0.2 * Math.min(c.h, into.h)) return true;
+    if ((into.px - c.px) * c.tx + (into.py - c.py) * c.ty + (into.pz - c.pz) * c.tz > 0 && into.py > c.py) {
+      // the other one is lying on this one: it is the one to move
+      into.state = 2; into.still = 0; into.since = 0;
+      return true;
+    }
+    c.py += worst + c.h * 0.5;
+    // turned half way to lying level, about the line it is tilted round
+    const ax = c.tz, az = -c.tx, al = Math.hypot(ax, az);
+    if (al > 1e-4) {
+      const half = Math.atan2(al, c.ty) * 0.25, sn = Math.sin(half) / al, cs = Math.cos(half);
+      const x = ax * sn, z = az * sn, { qx, qy, qz, qw } = c;
+      c.qx = cs * qx + x * qw - z * qy; c.qy = cs * qy + z * qx - x * qz; c.qz = cs * qz + z * qw + x * qy; c.qw = cs * qw - x * qx - z * qz;
+      axes(c);
+    }
+    c.vx = c.vy = c.vz = c.wx = c.wy = c.wz = 0;
+    if (++c.tries > 3) {
+      const dx = c.px - into.px, dz = c.pz - into.pz, l = Math.hypot(dx, dz) || 1;
+      c.vx = (dx / l) * 2.4; c.vz = (dz / l) * 2.4; c.vy = 1.2;
+      c.tries = 0;
+    }
+    c.still = 0; c.since = Math.min(c.since, 1.5);
+    return false;
+  }
+
+  /** A point of the moving coin's under face (r from its centre, d from the centre of coin o) against o's upper face. */
+  onto(o, rx, ry, rz, dx, dy, dz, fall) {
+    const along = dx * o.tx + dy * o.ty + dz * o.tz, over = along - o.h; // above that face by this much
+    if (over >= 0 || over < -(2.4 * o.h + fall)) return 0; // clear of it, or right under it (then it is this one that is being lain on)
+    if (dx * dx + dy * dy + dz * dz - along * along > o.r * o.r) return 0; // beside it, not on it
+    return this.touch(rx, ry, rz, o.tx, o.ty, o.tz, -over, 1);
+  }
+
+  /** A point on the top edge of a coin underneath (d from the moving coin's centre) against the moving coin c, whose upper face looks along f. */
+  under(c, fx, fy, fz, dx, dy, dz, tx, ty, tz) {
+    const along = dx * fx + dy * fy + dz * fz;
+    if (along <= -c.h || along >= c.h) return 0; // under this coin, or clear above it
+    if (dx * dx + dy * dy + dz * dz - along * along > c.r * c.r) return 0;
+    return this.touch(dx, dy, dz, tx, ty, tz, along + c.h, 1);
   }
 
   /** Notes a contact of the coin being solved: the point (from its centre), the way out, how deep, on what. */
@@ -414,12 +500,34 @@ class Coins {
   }
 }
 
+// Points over a face of a coin (radius 1), for checking one coin against another all round.
+const FACE = [];
+for (const [rho, n] of [[1, 20], [0.62, 10], [0.25, 5]]) for (let i = 0; i < n; i++) FACE.push([rho * Math.cos((i / n) * Math.PI * 2), rho * Math.sin((i / n) * Math.PI * 2)]);
+
+/** How far the deepest point of either face of coin a is inside coin b; 0 if none is. */
+function sunk(a, b) {
+  let worst = 0;
+  for (let side = -1; side <= 1; side += 2) {
+    const ox = a.px + a.nx * a.h * side - b.px, oy = a.py + a.ny * a.h * side - b.py, oz = a.pz + a.nz * a.h * side - b.pz;
+    for (let i = 0; i < FACE.length; i++) {
+      const u = FACE[i][0] * a.r, v = FACE[i][1] * a.r;
+      const dx = ox + a.ax * u + a.bx * v, dy = oy + a.ay * u + a.by * v, dz = oz + a.az * u + a.bz * v;
+      const along = dx * b.nx + dy * b.ny + dz * b.nz;
+      const inside = Math.min(b.h - Math.abs(along), b.r - Math.sqrt(Math.max(dx * dx + dy * dy + dz * dz - along * along, 0)));
+      if (inside > worst) worst = inside;
+    }
+  }
+  return worst;
+}
+
 /** The coin's axes in the world, from its quaternion: a and b in its plane, n through the hole. */
 function axes(c) {
   const { qx, qy, qz, qw } = c;
   c.ax = 1 - 2 * (qy * qy + qz * qz); c.ay = 2 * (qx * qy + qz * qw); c.az = 2 * (qx * qz - qy * qw);
   c.nx = 2 * (qx * qy - qz * qw); c.ny = 1 - 2 * (qx * qx + qz * qz); c.nz = 2 * (qy * qz + qx * qw);
   c.bx = 2 * (qx * qz + qy * qw); c.by = 2 * (qy * qz - qx * qw); c.bz = 1 - 2 * (qx * qx + qy * qy);
+  const up = c.ny >= 0 ? 1 : -1;
+  c.tx = c.nx * up; c.ty = c.ny * up; c.tz = c.nz * up;
 }
 
 /** How much a push at point r along d goes into turning the coin instead of moving it (mass 1). */

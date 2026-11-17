@@ -6,6 +6,7 @@
 // everything else here they are of the moment: thrown out, down beside the
 // work, and gone within a second or so.
 import * as THREE from 'three';
+import { createCoins } from './coins.js';
 
 const GRAVITY = 55; // world units are decimetres
 const UPV = new THREE.Vector3(0, 1, 0);
@@ -209,7 +210,7 @@ class Shades {
 }
 
 /**
- * Instanced little solids: water drops, slurry, crumbs of stone, coins.
+ * Instanced little solids: water drops, slurry, crumbs of stone.
  *   unit    size of an instance at scale 1
  *   radius  how high its centre rests above the floor, at scale 1
  *   stick   lands as a splat instead of bouncing, and is gone half a second later
@@ -404,13 +405,12 @@ export function createParticles(scene) {
   // stone ground to a paste in water: wet, so it shines a little; its colour comes from the stone
   const slurry = instanced(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0, transparent: true, opacity: 0.92, depthWrite: false, envMapIntensity: 0.5 }), 'slurry', PASTE);
   const crumb = instanced(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, metalness: 0, flatShading: true, envMapIntensity: 0.7 }), 'crumb', GRIT);
-  const coin = new THREE.MeshStandardMaterial({ color: 0xf0bf55, roughness: 0.22, metalness: 1, envMapIntensity: 1.6 });
   const fx = {
     sparks: new Sparks(scene),
     water: new Burst(scene, new THREE.IcosahedronGeometry(1, 2), water, 420, { unit: 0.03, stick: true, thin: 0.65 }),
     slurry: new Burst(scene, new THREE.IcosahedronGeometry(1, 2), slurry, 420, { unit: 0.03, stick: true, shade: 0.22 }),
     chips: new Burst(scene, lumpGeometry(), crumb, 200, { unit: 0.03, bounce: 0.3, grit: true, shade: 0.8 }),
-    coins: new Burst(scene, new THREE.CylinderGeometry(0.16, 0.16, 0.035, 20), coin, 260, { radius: 0.04, bounce: 0.45 }),
+    coins: createCoins(scene, 260), // rigid bodies of their own (coins.js): they land, lie flat and heap up
     puffs: new Puffs(scene),
     update(dt) { fx.sparks.update(dt); fx.water.update(dt); fx.slurry.update(dt); fx.chips.update(dt); fx.coins.update(dt); fx.puffs.update(dt); },
     clear() { fx.water.clear(); fx.slurry.clear(); fx.chips.clear(); fx.coins.clear(); },

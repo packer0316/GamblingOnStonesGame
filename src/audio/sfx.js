@@ -17,6 +17,7 @@ const ONE_SHOTS = [
   'ui_click', 'ui_hover_1', 'ui_hover_2', 'ui_hover_3', 'deny', 'whoosh', 'lean_in_1', 'lean_in_2', 'lean_out',
   'stone_down_1', 'stone_down_2', 'stone_down_3', 'stone_slide', 'stone_clack', 'stone_lift', 'cloth_rustle', 'cloth_snap',
   'pay_notes', 'count_notes', 'count_end', 'cash_ding', 'coins_1', 'coins_2', 'coins_shower',
+  'coin_spray', 'coin_clink_1', 'coin_clink_2', 'coin_clink_3', 'coin_clink_4', 'coin_felt_1', 'coin_felt_2', 'coin_felt_3',
   'torch_on', 'torch_off', 'lamp_off', 'lamp_on', 'torch_tap_1', 'torch_tap_2', 'torch_tap_3', 'torch_tap_4', 'torch_tap_5',
   'grinder_start', 'grinder_stop', 'squirt', 'wipe',
   'machine_roll', 'vise_close', 'vise_open', 'saw_start', 'saw_stop', 'pour_1', 'pour_2',
@@ -43,7 +44,7 @@ export function createSfx() {
   let preloading = null;
   const amb = { murmur: null, duck: 1 };
   let music = null; // the <audio> element, once the first gesture has started it
-  let lastHover = -1;
+  let lastHover = -1, lastClink = -1;
 
   function ensure() {
     if (ctx) return true;
@@ -318,6 +319,31 @@ export function createSfx() {
     coins: guard((big) => {
       if (!play(big ? 'coins_shower' : pick('coins_1', 'coins_2'), { gain: big ? 0.55 : 0.7 })) for (let i = 0; i < 5; i++) tone({ f0: rnd(2400, 4200), dur: 0.08, gain: 0.06, at: i * 0.05 });
     }),
+    /**
+     * Coins thrown up off the bench, `count` of them: the handful leaving. A few are then
+     * heard one by one as they land (coinClink); a great many need the body of a real pour
+     * under those, timed to when the first of them come down.
+     */
+    coinSpray: guard((count = 14) => {
+      const big = Math.min(1, count / 120);
+      if (!play('coin_spray', { gain: 0.55 + 0.3 * big, rate: rnd(0.96, 1.05) })) for (let i = 0; i < 6; i++) tone({ f0: rnd(3200, 5600), dur: 0.07, gain: 0.05, at: i * 0.035 });
+      if (count >= 40) play('coins_shower', { gain: 0.2 + 0.28 * big, at: 0.3, offset: 0.4, dur: 1.6 + 1.6 * big });
+    }),
+    /**
+     * One coin landing: `force` 0..1, on the felt or (`metal`) on another coin. Called by
+     * the coins themselves as they strike, so it is thinned out here: of a hundred landing
+     * together only so many can be told apart, and the rest are just level.
+     */
+    coinClink: guard((force = 0.5, metal = false) => {
+      const t = now();
+      if (t - lastClink < 0.022) return;
+      lastClink = t;
+      const f = Math.max(0.15, Math.min(1, force));
+      const name = metal ? pick('coin_clink_1', 'coin_clink_2', 'coin_clink_3', 'coin_clink_4') : pick('coin_felt_1', 'coin_felt_2', 'coin_felt_3');
+      if (!play(name, { gain: (metal ? 0.5 : 0.42) * (0.25 + 0.75 * f), rate: rnd(0.9, 1.14) })) tone({ f0: rnd(3600, 5200), dur: 0.05, gain: 0.05 * f });
+      // a hard landing on cloth still rings the coin a little
+      if (!metal && f > 0.55) play(pick('coin_clink_1', 'coin_clink_3'), { gain: 0.16 * f, rate: rnd(1.0, 1.2), at: 0.004 });
+    }),
     /** The buyer's note counter riffling out the payment, then its beep and a bell. */
     countUp: guard((secs = 1, big = false) => {
       const s = Math.max(0.5, Math.min(3, secs));
@@ -380,20 +406,19 @@ export function createSfx() {
 
     /**
      * How the crowd round the bench takes a reveal: 3 大漲, 2 切漲, 1 擦漲, 0 持平,
-     * -1 跌, -2 垮. The big ones get the gong, cheering and firecrackers.
+     * -1 跌, -2 垮. The big ones get the gong, cheering and firecrackers. (The coins that
+     * fly on a win bring their own sound: coinSpray as they leave, coinClink as they land.)
      */
     verdict: guard((tier) => {
       // (levels measured off a recorded round: each tier lands louder than the one below it)
       if (tier >= 3) {
         play('gong_big', { gain: 1.0 }) || tone({ f0: 660, f1: 1320, dur: 0.8, gain: 0.2 });
         play('crowd_ooh_big', { gain: 0.75, at: 0.05 });
-        play('coins_shower', { gain: 0.5, at: 0.3 });
         play('crowd_cheer', { gain: 0.85, at: 0.95 });
         play('firecrackers', { gain: 0.65, at: 1.2 });
       } else if (tier === 2) {
         play('gong_small', { gain: 0.45 }) || tone({ f0: 660, f1: 990, dur: 0.6, gain: 0.2 });
         play('crowd_ooh', { gain: 0.55, at: 0.05 });
-        play('coins_2', { gain: 0.5, at: 0.25 });
         play('applause', { gain: 0.5, at: 0.8 });
       } else if (tier === 1) {
         // below the gongs everything is one stroke of drum and cymbal: no jingles, nothing with a tune

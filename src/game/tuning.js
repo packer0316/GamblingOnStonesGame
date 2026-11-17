@@ -2,7 +2,10 @@
 // `npm run sim -- --plays` to see what it does to the returns.
 
 export const TUNING = {
-  startCash: 300000,
+  startCash: 500000,
+  // GM panel (top-right button, ` key) and the `?cash=` URL parameter. Off: the bankroll can
+  // only move by playing, and every reload starts at `startCash`.
+  gm: false,
 
   // ---- 機緣: how often a stone is one of the rare finds (帝王綠, 冰紫羅蘭, 春帶彩, a glass
   // heart under dull flesh, colour hidden in the core). Scales every mine's `lucky` odds in

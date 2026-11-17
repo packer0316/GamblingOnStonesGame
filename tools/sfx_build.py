@@ -156,6 +156,17 @@ SOUNDS = {
     'coins_1': ([L('k:rpg/handleCoins', 0.04)], 0, 0),
     'coins_2': ([L('k:rpg/handleCoins2')], 0, 0),
     'coins_shower': ([L('fs:334969', 0.2, 5.6)], 0.02, 1.2),
+    # coins thrown up off the bench: a handful leaving at once (takes of coins in the hand, staggered and re-pitched)
+    'coin_spray': ([L('k:rpg/handleCoins', 0.04), L('k:rpg/handleCoins2', 0, None, 0.85, 0.09, 1.12), L('k:rpg/handleCoins', 0.04, None, 0.6, 0.24, 0.9)], 0, 0.12),
+    # one coin coming down on another: a single click cut out of the handful, with a light strike of metal under it for the ring
+    'coin_clink_1': ([L('k:rpg/handleCoins', 0.050, 0.128), L('k:impact/impactMetal_light_001', 0, None, 0.4, 0, 2.0)], 0.001, 0.04),
+    'coin_clink_2': ([L('k:rpg/handleCoins', 0.127, 0.262), L('k:impact/impactMetal_light_002', 0, None, 0.35, 0, 2.2)], 0.001, 0.04),
+    'coin_clink_3': ([L('k:rpg/handleCoins', 0.316, 0.452), L('k:impact/impactMetal_light_004', 0, None, 0.4, 0, 1.8)], 0.001, 0.04),
+    'coin_clink_4': ([L('k:rpg/handleCoins', 0.587, 0.657), L('k:impact/impactMetal_light_000', 0, None, 0.3, 0, 2.4)], 0.001, 0.04),
+    # ... and on the felt: the same click with the top taken off it, over the soft knock of the cloth
+    'coin_felt_1': ([L('k:rpg/handleCoins', 0.050, 0.128, lp=4200), L('k:impact/impactSoft_medium_000', 0, None, 0.55, 0, 1.6)], 0.001, 0.04),
+    'coin_felt_2': ([L('k:rpg/handleCoins', 0.316, 0.452, lp=3800), L('k:impact/impactSoft_medium_002', 0, None, 0.55, 0, 1.8)], 0.001, 0.04),
+    'coin_felt_3': ([L('k:rpg/handleCoins2', 0.111, 0.166, lp=4500), L('k:impact/impactSoft_medium_004', 0, None, 0.5, 0, 1.5)], 0.001, 0.04),
     # ---- torch and the lamp over the bench
     'torch_on': ([L('fs:187335', 0, 0.5)], 0, 0.05),
     'torch_off': ([L('fs:457463', 0.09)], 0, 0.03),

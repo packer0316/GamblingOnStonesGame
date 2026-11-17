@@ -24,7 +24,7 @@ export function createHud(root, cb) {
   const top = el('div', 'top', `
     <div class="brand">一刀窮 · 一刀富<small>緬甸翡翠原石</small></div>
     <div class="cash"><label>本金</label><b>¥0</b><i class="cash-delta"></i></div>
-    <div class="top-btns"><button data-act="gm" title="GM 面板（快捷鍵 \`）">GM</button><button data-act="rules">行話</button><button data-act="mute">音效 開</button></div>`);
+    <div class="top-btns">${cb.gm ? '<button data-act="gm" title="GM 面板（快捷鍵 `）">GM</button>' : ''}<button data-act="rules">行話</button><button data-act="mute">音效 開</button></div>`);
   // GM panel: set the bankroll to anything, or nudge it by a fixed amount.
   const GM_STEPS = [1e4, 1e5, 1e6, 1e7, 1e8, 1e9];
   const stepLabel = (v) => (v >= 1e8 ? `${v / 1e8} 億` : `${v / 1e4} 萬`);
@@ -56,6 +56,7 @@ export function createHud(root, cb) {
   root.append(top, stall, stallBar, sheet, tools, msg, saying, delta, confirm, svg, modal, rules, gm);
 
   function toggleGm(show = gm.classList.contains('hidden')) {
+    if (!cb.gm) show = false;
     gm.classList.toggle('hidden', !show);
     if (show) { rules.classList.add('hidden'); gmInput.value = ''; gmInput.classList.remove('bad'); gmInput.focus(); }
     else gmInput.blur();
